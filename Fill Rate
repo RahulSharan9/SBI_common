@@ -9,6 +9,7 @@ exclude_zero_in_fill = ['col1', 'col2', 'col3']
 
 all_data = []
 
+# Step 1: Read all quarters and prepare master DataFrame
 for quarter_folder in os.listdir(output_dir):
     quarter_path = os.path.join(output_dir, quarter_folder)
     if not os.path.isdir(quarter_path):
@@ -19,7 +20,6 @@ for quarter_folder in os.listdir(output_dir):
         print(f"No data_quality folder in {quarter_folder}, skipping.")
         continue
 
-    # Find all CSVs ending with _stats.csv
     csv_files = [f for f in os.listdir(data_quality_path) if f.endswith("_stats.csv")]
     if not csv_files:
         print(f"No stats CSV found in {data_quality_path}, skipping.")
@@ -49,8 +49,6 @@ for quarter_folder in os.listdir(output_dir):
 
         # Compute fill rate
         df['fill_rate_pct'] = 100 - df['null_pct'] - df['zero_pct']
-
-        # Apply exclusion formula
         mask = df['column'].isin(exclude_zero_in_fill)
         df.loc[mask, 'fill_rate_pct'] = 100 - df.loc[mask, 'null_pct']
 
@@ -60,11 +58,14 @@ for quarter_folder in os.listdir(output_dir):
 
         all_data.append(df_quarter)
 
-# Combine all quarters
+# Step 2: Combine all quarters
 master_df = pd.concat(all_data, ignore_index=True)
 
-# Group by segment + column and compute min, max, avg
-summary_df = master_df.groupby(['segment','column']).agg(
+# Step 3: Group by segment + column for aggregations
+grouped = master_df.groupby(['segment','column'])
+
+# Aggregate min, max, avg
+summary_df = grouped.agg(
     min_null_pct=('null_pct', 'min'),
     max_null_pct=('null_pct', 'max'),
     avg_null_pct=('null_pct', 'mean'),
@@ -76,10 +77,25 @@ summary_df = master_df.groupby(['segment','column']).agg(
     avg_fill_rate_pct=('fill_rate_pct', 'mean')
 ).reset_index()
 
-# Round percentages for readability
+# Step 4: Add corresponding quarter for each min/max value
+def get_quarter_for_extreme(df, grouped, col):
+    min_idx = grouped[col].idxmin()
+    max_idx = grouped[col].idxmax()
+    min_quarters = df.loc[min_idx.values, 'Quarter'].values
+    max_quarters = df.loc[max_idx.values, 'Quarter'].values
+    return min_quarters, max_quarters
+
+# Null %
+summary_df['min_null_quarter'], summary_df['max_null_quarter'] = get_quarter_for_extreme(master_df, grouped, 'null_pct')
+# Zero %
+summary_df['min_zero_quarter'], summary_df['max_zero_quarter'] = get_quarter_for_extreme(master_df, grouped, 'zero_pct')
+# Fill Rate %
+summary_df['min_fill_rate_quarter'], summary_df['max_fill_rate_quarter'] = get_quarter_for_extreme(master_df, grouped, 'fill_rate_pct')
+
+# Round percentages
 summary_df = summary_df.round(2)
 
 # Save to CSV
-summary_df.to_csv("segment_column_fillrate_trends.csv", index=False)
+summary_df.to_csv("segment_column_fillrate_trends_with_quarters.csv", index=False)
 
-print("Segment-level null/zero/fill rate trend summary saved as 'segment_column_fillrate_trends.csv'")
+print("Segment-level null/zero/fill rate trend summary with quarters saved as 'segment_column_fillrate_trends_with_quarters.csv'")
