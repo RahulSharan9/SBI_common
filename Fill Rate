@@ -52,7 +52,7 @@ for quarter_folder in os.listdir(output_dir):
         mask = df['column'].isin(exclude_zero_in_fill)
         df.loc[mask, 'fill_rate_pct'] = 100 - df.loc[mask, 'null_pct']
 
-        # Keep relevant columns and quarter info
+        # Keep relevant columns and add quarter info
         df_quarter = df[['segment', 'column', 'null_pct', 'zero_pct', 'fill_rate_pct']].copy()
         df_quarter['Quarter'] = quarter_folder
 
@@ -77,12 +77,21 @@ summary_df = grouped.agg(
     avg_fill_rate_pct=('fill_rate_pct', 'mean')
 ).reset_index()
 
-# Step 4: Add corresponding quarter for each min/max value
+# Step 4: Add corresponding quarter for each min/max value safely
 def get_quarter_for_extreme(df, grouped, col):
-    min_idx = grouped[col].idxmin()
-    max_idx = grouped[col].idxmax()
-    min_quarters = df.loc[min_idx.values, 'Quarter'].values
-    max_quarters = df.loc[max_idx.values, 'Quarter'].values
+    min_quarters = []
+    max_quarters = []
+
+    for name, group in grouped:
+        if group[col].isnull().all():  # all NaN -> append NaN
+            min_quarters.append(pd.NA)
+            max_quarters.append(pd.NA)
+        else:
+            min_idx = group[col].idxmin()
+            max_idx = group[col].idxmax()
+            min_quarters.append(df.loc[min_idx, 'Quarter'])
+            max_quarters.append(df.loc[max_idx, 'Quarter'])
+
     return min_quarters, max_quarters
 
 # Null %
