@@ -30,16 +30,20 @@ for quarter_folder in os.listdir(output_dir):
         df = pd.read_csv(csv_path)
         df.columns = df.columns.str.strip()
 
+        # Extract segment from file name (SEG1.parquet -> SEG1)
+        df['segment'] = df['file'].str.replace('.parquet','', regex=False)
+
         # Compute % nulls and % zeros
         df['null_pct'] = df['null counts'] / df['total rows'] * 100
         df['zero_pct'] = df['zero counts'] / df['total rows'] * 100
 
-        # Compute fill rate based on column type
+        # Compute fill rate
         df['fill_rate_pct'] = 100 - df['null_pct'] - df['zero_pct']
-        df.loc[df['column'].isin(exclude_zero_in_fill), 'fill_rate_pct'] = 100 - df.loc[df['column'].isin(exclude_zero_in_fill), 'null_pct']
+        mask = df['column'].isin(exclude_zero_in_fill)
+        df.loc[mask, 'fill_rate_pct'] = 100 - df.loc[mask, 'null_pct']
 
         # Keep relevant columns and add quarter info
-        df_quarter = df[['column', 'null_pct', 'zero_pct', 'fill_rate_pct']].copy()
+        df_quarter = df[['segment', 'column', 'null_pct', 'zero_pct', 'fill_rate_pct']].copy()
         df_quarter['Quarter'] = quarter_folder
 
         all_data.append(df_quarter)
@@ -47,8 +51,8 @@ for quarter_folder in os.listdir(output_dir):
 # Combine all quarters
 master_df = pd.concat(all_data, ignore_index=True)
 
-# Group by column and compute min, max, avg for null, zero, and fill_rate
-summary_df = master_df.groupby('column').agg(
+# Group by segment + column and compute min, max, avg
+summary_df = master_df.groupby(['segment','column']).agg(
     min_null_pct=('null_pct', 'min'),
     max_null_pct=('null_pct', 'max'),
     avg_null_pct=('null_pct', 'mean'),
@@ -60,10 +64,10 @@ summary_df = master_df.groupby('column').agg(
     avg_fill_rate_pct=('fill_rate_pct', 'mean')
 ).reset_index()
 
-# Round percentages for readability
+# Round percentages
 summary_df = summary_df.round(2)
 
 # Save to CSV
-summary_df.to_csv("column_null_zero_fillrate_trends.csv", index=False)
+summary_df.to_csv("segment_column_fillrate_trends.csv", index=False)
 
-print("Column null/zero/fill rate trend summary saved as 'column_null_zero_fillrate_trends.csv'")
+print("Segment-level null/zero/fill rate trend summary saved as 'segment_column_fillrate_trends.csv'")
