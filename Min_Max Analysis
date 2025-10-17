@@ -48,4 +48,96 @@ for quarter_folder in os.listdir(output_dir):
             else:
                 df[v] = pd.NA
 
-        # Convert numeric columns to
+        # Convert numeric columns to float
+        for col in ['min', 'max', 'min_length', 'max_length']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # Convert dates to datetime
+        for col in ['min_date', 'max_date']:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce')
+
+        df['segment'] = df['file'].str.replace('.parquet','', regex=False)
+        df['Quarter'] = quarter_folder
+
+        all_data.append(df)
+
+# ========================
+# Step 2: Combine all quarters
+# ========================
+master_df = pd.concat(all_data, ignore_index=True)
+
+# ========================
+# Step 3: Group by segment + column
+# ========================
+grouped = master_df.groupby(['segment','column'])
+
+def get_quarter_for_extreme(df, grouped, col):
+    min_quarters = []
+    max_quarters = []
+    for name, group in grouped:
+        if group[col].isnull().all():
+            min_quarters.append(pd.NA)
+            max_quarters.append(pd.NA)
+        else:
+            min_idx = group[col].idxmin()
+            max_idx = group[col].idxmax()
+            min_quarters.append(df.loc[min_idx, 'Quarter'])
+            max_quarters.append(df.loc[max_idx, 'Quarter'])
+    return min_quarters, max_quarters
+
+# ========================
+# Step 4: Numeric aggregation
+# ========================
+numeric_cols = ['min', 'max']
+
+agg_dict = {col: ['min', 'max', 'mean'] for col in numeric_cols}
+summary_df = grouped.agg(agg_dict)
+summary_df.columns = ['_'.join(filter(None, col)).strip() for col in summary_df.columns.values]
+summary_df = summary_df.reset_index()
+
+for col in numeric_cols:
+    min_q, max_q = get_quarter_for_extreme(master_df, grouped, col)
+    summary_df[f'{col}_min_quarter'] = min_q
+    summary_df[f'{col}_max_quarter'] = max_q
+
+# ========================
+# Step 5: String length aggregation
+# ========================
+for col in ['min_length', 'max_length']:
+    if col in master_df.columns:
+        summary_df[f'{col}_min'] = grouped[col].min().values
+        summary_df[f'{col}_min_quarter'] = get_quarter_for_extreme(master_df, grouped, col)[0]
+        summary_df[f'{col}_max'] = grouped[col].max().values
+        summary_df[f'{col}_max_quarter'] = get_quarter_for_extreme(master_df, grouped, col)[1]
+
+# ========================
+# Step 6: Date aggregation
+# ========================
+for col in ['min_date', 'max_date']:
+    if col in master_df.columns:
+        summary_df[f'{col}_min'] = grouped[col].min().values
+        summary_df[f'{col}_min_quarter'] = get_quarter_for_extreme(master_df, grouped, col)[0]
+        summary_df[f'{col}_max'] = grouped[col].max().values
+        summary_df[f'{col}_max_quarter'] = get_quarter_for_extreme(master_df, grouped, col)[1]
+
+# ========================
+# Step 7: Round numeric values
+# ========================
+summary_df = summary_df.round(2)
+
+# ========================
+# Step 8: Reorder columns for easier interpretation
+# ========================
+cols = ['segment', 'column']
+for col in numeric_cols + ['min_length', 'max_length', 'min_date', 'max_date']:
+    if col in summary_df.columns:
+        cols.extend([col, f'{col}_min_quarter' if "min" in col else f'{col}_max_quarter'])
+summary_df = summary_df[cols]
+
+# ========================
+# Step 9: Save CSV
+# ========================
+summary_df.to_csv("segment_value_trends_with_quarters.csv", index=False)
+print("Segment-level value trend summary saved as 'segment_value_trends_with_quarters.csv'")
