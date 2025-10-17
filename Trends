@@ -1,0 +1,45 @@
+import os
+import pandas as pd
+
+output_dir = "output_folder"
+segments = ["SEG1", "SEG2", "SEG3", "SEG4", "SEG5"]
+all_quarters = []
+
+for quarter_folder in os.listdir(output_dir):
+    quarter_path = os.path.join(output_dir, quarter_folder)
+    if not os.path.isdir(quarter_path):
+        continue
+
+    data_quality_path = os.path.join(quarter_path, "data_quality")
+    if not os.path.isdir(data_quality_path):
+        print(f"No data_quality folder in {quarter_folder}, skipping.")
+        continue
+
+    # Only pick CSVs ending with _stats.csv
+    csv_files = [f for f in os.listdir(data_quality_path) if f.endswith("_stats.csv")]
+    if not csv_files:
+        print(f"No stats CSV found in {data_quality_path}, skipping.")
+        continue
+    csv_file = csv_files[0]
+    csv_path = os.path.join(data_quality_path, csv_file)
+
+    df = pd.read_csv(csv_path)
+    df.columns = df.columns.str.strip()  # remove spaces
+
+    df_acct = df[df["column"] == "ACCOUNTID"]
+
+    quarter_dict = {"Quarter": quarter_folder}
+
+    for seg in segments:
+        row = df_acct[df_acct["file"] == f"{seg}.parquet"]
+        if not row.empty:
+            quarter_dict[seg] = int(row["total rows"].values[0])
+        else:
+            quarter_dict[seg] = 0
+
+    all_quarters.append(quarter_dict)
+
+final_df = pd.DataFrame(all_quarters)
+final_df.to_csv("accountid_summary.csv", index=False)
+
+print("Consolidated AccountID summary saved as 'accountid_summary.csv'")
