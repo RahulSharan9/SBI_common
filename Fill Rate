@@ -1,0 +1,69 @@
+import os
+import pandas as pd
+
+# Path to main output folder
+output_dir = "output_folder"
+
+# Columns to use different fill rate formula (1 - % null only)
+exclude_zero_in_fill = ['col1', 'col2', 'col3']
+
+all_data = []
+
+for quarter_folder in os.listdir(output_dir):
+    quarter_path = os.path.join(output_dir, quarter_folder)
+    if not os.path.isdir(quarter_path):
+        continue
+
+    data_quality_path = os.path.join(quarter_path, "data_quality")
+    if not os.path.isdir(data_quality_path):
+        print(f"No data_quality folder in {quarter_folder}, skipping.")
+        continue
+
+    csv_files = [f for f in os.listdir(data_quality_path) if f.endswith("_stats.csv")]
+    if not csv_files:
+        print(f"No stats CSV found in {data_quality_path}, skipping.")
+        continue
+
+    for csv_file in csv_files:
+        csv_path = os.path.join(data_quality_path, csv_file)
+
+        df = pd.read_csv(csv_path)
+        df.columns = df.columns.str.strip()
+
+        # Compute % nulls and % zeros
+        df['null_pct'] = df['null counts'] / df['total rows'] * 100
+        df['zero_pct'] = df['zero counts'] / df['total rows'] * 100
+
+        # Compute fill rate based on column type
+        df['fill_rate_pct'] = 100 - df['null_pct'] - df['zero_pct']
+        df.loc[df['column'].isin(exclude_zero_in_fill), 'fill_rate_pct'] = 100 - df.loc[df['column'].isin(exclude_zero_in_fill), 'null_pct']
+
+        # Keep relevant columns and add quarter info
+        df_quarter = df[['column', 'null_pct', 'zero_pct', 'fill_rate_pct']].copy()
+        df_quarter['Quarter'] = quarter_folder
+
+        all_data.append(df_quarter)
+
+# Combine all quarters
+master_df = pd.concat(all_data, ignore_index=True)
+
+# Group by column and compute min, max, avg for null, zero, and fill_rate
+summary_df = master_df.groupby('column').agg(
+    min_null_pct=('null_pct', 'min'),
+    max_null_pct=('null_pct', 'max'),
+    avg_null_pct=('null_pct', 'mean'),
+    min_zero_pct=('zero_pct', 'min'),
+    max_zero_pct=('zero_pct', 'max'),
+    avg_zero_pct=('zero_pct', 'mean'),
+    min_fill_rate_pct=('fill_rate_pct', 'min'),
+    max_fill_rate_pct=('fill_rate_pct', 'max'),
+    avg_fill_rate_pct=('fill_rate_pct', 'mean')
+).reset_index()
+
+# Round percentages for readability
+summary_df = summary_df.round(2)
+
+# Save to CSV
+summary_df.to_csv("column_null_zero_fillrate_trends.csv", index=False)
+
+print("Column null/zero/fill rate trend summary saved as 'column_null_zero_fillrate_trends.csv'")
