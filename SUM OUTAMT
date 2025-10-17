@@ -6,6 +6,108 @@ import pandas as pd
 BASE_DIR = Path(r"F:\Retail_data_ccdp_extracted")
 OUT_CSV = BASE_DIR / "quarterly_OUTAMT_summary.csv"
 
+SEGMENTS = ["AGR", "MSME", "RETAIL"]
+
+# ---------------- HELPER FUNCTION ----------------
+def clean_numeric_column(df: pl.DataFrame, col: str) -> pl.DataFrame:
+    """
+    Cleans a numeric column containing strings like ' 1,23,000 ', '-', or 'NA'
+    and converts it safely to Float64.
+    """
+    if col not in df.columns:
+        return df
+
+    df = df.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+    df = df.with_columns(
+        pl.col(col)
+        .str.replace_all(r"[^\d\.\-]", "")  # remove commas, text, spaces
+        .str.strip_chars()
+        .cast(pl.Float64, strict=False)
+        .alias(col)
+    )
+
+    return df
+
+
+# ---------------- MAIN LOGIC ----------------
+results = []
+
+for quarter_dir in BASE_DIR.glob("*"):
+    cleaned_dir = quarter_dir / "cleaned"
+    if not cleaned_dir.exists():
+        continue
+
+    for segment in SEGMENTS:
+        file_path = cleaned_dir / f"cleaned_{segment}_full.parquet"
+        if not file_path.exists():
+            continue
+
+        try:
+            df = pl.read_parquet(file_path)
+        except Exception as e:
+            print(f"Error reading {file_path}: {e}")
+            continue
+
+        if "OUTAMT" not in df.columns:
+            print(f"Skipping {file_path}: no OUTAMT column.")
+            continue
+
+        # Clean and convert OUTAMT properly
+        df = clean_numeric_column(df, "OUTAMT")
+        df = df.filter(pl.col("OUTAMT").is_not_null())
+
+        if df.is_empty():
+            print(f"No valid OUTAMT values in {file_path}")
+            continue
+
+        # Determine REPORTDT if available
+        if "REPORTDT" in df.columns:
+            try:
+                report_dt = df["REPORTDT"].unique().to_list()[0]
+            except:
+                report_dt = "NA"
+        else:
+            report_dt = "NA"
+
+        # Compute summary statistics
+        out_min = df["OUTAMT"].min()
+        out_max = df["OUTAMT"].max()
+        out_sum = df["OUTAMT"].sum()
+        out_avg = df["OUTAMT"].mean()
+        row_count = df.height  # number of rows
+
+        results.append({
+            "Quarter": quarter_dir.name,
+            "File": file_path.name,
+            "REPORTDT": report_dt,
+            "Row_Count": row_count,
+            "Min_OUTAMT": out_min,
+            "Max_OUTAMT": out_max,
+            "Sum_OUTAMT": out_sum,
+            "Avg_OUTAMT": out_avg
+        })
+
+# ---------------- SAVE RESULT ----------------
+if results:
+    summary_df = pd.DataFrame(results)
+    summary_df.sort_values(by=["Quarter", "File"], inplace=True)
+    summary_df.to_csv(OUT_CSV, index=False)
+    print(f"✅ Summary written to: {OUT_CSV}")
+else:
+    print("⚠️ No results found.")
+
+
+
+
+____________________________________________________________________________________
+import polars as pl
+from pathlib import Path
+import pandas as pd
+
+# ---------------- CONFIG ----------------
+BASE_DIR = Path(r"F:\Retail_data_ccdp_extracted")
+OUT_CSV = BASE_DIR / "quarterly_OUTAMT_summary.csv"
+
 # Define segment filenames pattern
 SEGMENTS = ["AGR", "MSME", "RETAIL"]
 
