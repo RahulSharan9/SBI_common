@@ -73,6 +73,7 @@ master_df = pd.concat(all_data, ignore_index=True)
 # ========================
 grouped = master_df.groupby(['segment','column'])
 
+# Helper to get quarter for min/max
 def get_quarter_for_extreme(df, grouped, col):
     min_quarters = []
     max_quarters = []
@@ -88,7 +89,7 @@ def get_quarter_for_extreme(df, grouped, col):
     return min_quarters, max_quarters
 
 # ========================
-# Step 4: Numeric aggregation
+# Step 4: Numeric aggregation (min, max, mean)
 # ========================
 numeric_cols = ['min', 'max']
 
@@ -128,13 +129,25 @@ for col in ['min_date', 'max_date']:
 summary_df = summary_df.round(2)
 
 # ========================
-# Step 8: Reorder columns for easier interpretation
+# Step 8: Reorder columns for adjacent quarter info
 # ========================
-cols = ['segment', 'column']
-for col in numeric_cols + ['min_length', 'max_length', 'min_date', 'max_date']:
+final_cols = ['segment', 'column']
+
+for col in numeric_cols:
     if col in summary_df.columns:
-        cols.extend([col, f'{col}_min_quarter' if "min" in col else f'{col}_max_quarter'])
-summary_df = summary_df[cols]
+        final_cols.append(col)
+        q_col = f'{col}_min_quarter' if col=='min' else f'{col}_max_quarter'
+        if q_col in summary_df.columns:
+            final_cols.append(q_col)
+
+for col in ['min_length', 'max_length', 'min_date', 'max_date']:
+    if col in summary_df.columns:
+        final_cols.append(col)
+        q_col = f'{col}_min_quarter' if 'min' in col else f'{col}_max_quarter'
+        if q_col in summary_df.columns:
+            final_cols.append(q_col)
+
+summary_df = summary_df[final_cols]
 
 # ========================
 # Step 9: Save CSV
