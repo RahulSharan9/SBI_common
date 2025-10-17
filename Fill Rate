@@ -19,6 +19,7 @@ for quarter_folder in os.listdir(output_dir):
         print(f"No data_quality folder in {quarter_folder}, skipping.")
         continue
 
+    # Find all CSVs ending with _stats.csv
     csv_files = [f for f in os.listdir(data_quality_path) if f.endswith("_stats.csv")]
     if not csv_files:
         print(f"No stats CSV found in {data_quality_path}, skipping.")
@@ -28,21 +29,32 @@ for quarter_folder in os.listdir(output_dir):
         csv_path = os.path.join(data_quality_path, csv_file)
 
         df = pd.read_csv(csv_path)
-        df.columns = df.columns.str.strip()
+
+        # Standardize column names
+        df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+
+        # Ensure numeric columns are float
+        for col in ['total_rows', 'null_counts', 'zero_counts']:
+            if col in df.columns:
+                df[col] = df[col].astype(float)
+            else:
+                df[col] = 0.0  # default 0 if column missing
 
         # Extract segment from file name (SEG1.parquet -> SEG1)
         df['segment'] = df['file'].str.replace('.parquet','', regex=False)
 
         # Compute % nulls and % zeros
-        df['null_pct'] = df['null counts'] / df['total rows'] * 100
-        df['zero_pct'] = df['zero counts'] / df['total rows'] * 100
+        df['null_pct'] = df['null_counts'] / df['total_rows'] * 100
+        df['zero_pct'] = df['zero_counts'] / df['total_rows'] * 100
 
         # Compute fill rate
         df['fill_rate_pct'] = 100 - df['null_pct'] - df['zero_pct']
+
+        # Apply exclusion formula
         mask = df['column'].isin(exclude_zero_in_fill)
         df.loc[mask, 'fill_rate_pct'] = 100 - df.loc[mask, 'null_pct']
 
-        # Keep relevant columns and add quarter info
+        # Keep relevant columns and quarter info
         df_quarter = df[['segment', 'column', 'null_pct', 'zero_pct', 'fill_rate_pct']].copy()
         df_quarter['Quarter'] = quarter_folder
 
@@ -64,7 +76,7 @@ summary_df = master_df.groupby(['segment','column']).agg(
     avg_fill_rate_pct=('fill_rate_pct', 'mean')
 ).reset_index()
 
-# Round percentages
+# Round percentages for readability
 summary_df = summary_df.round(2)
 
 # Save to CSV
