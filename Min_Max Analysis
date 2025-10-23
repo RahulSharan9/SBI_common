@@ -1,226 +1,191 @@
 import os
 import pandas as pd
-import numpy as np
 
-# -----------------------
-# CONFIG
-# -----------------------
-output_dir = "output_folder"   # main folder containing quarter subfolders
-# If your CSV headers differ, adjust these mappings (left = expected in CSV, right = internal name)
-COLUMN_MAP = {
+
+# ========================
+# USER CONFIG
+# ========================
+output_dir = "output_folder"   # change if needed
+
+# column aliases we want to normalize
+COLUMN_ALIASES = {
     "file": "file",
     "column": "column",
     "min_value": "min",
     "max_value": "max",
-    "mean": "mean",            # optional per-quarter mean/avg if present
-    "avg": "mean",             # some files may call it 'avg'
-    "median": "median",        # optional - we won't use median for final avg but keep if present
+    "minlen": "min_length",
+    "min_len": "min_length",
     "min_length": "min_length",
+    "maxlen": "max_length",
+    "max_len": "max_length",
     "max_length": "max_length",
     "min_date": "min_date",
-    "max_date": "max_date"
+    "max_date": "max_date",
+    "avg_value": "avg_value",
+    "mean_value": "avg_value",        # alias
+    "total_rows": "total_rows"
 }
-# suffix for output filename
-OUTFILE = "segment_value_trends_fresh_start.csv"
 
-# -----------------------
-# STEP 1: read all quarter stats into master_df
-# -----------------------
-records = []
-for quarter_folder in sorted(os.listdir(output_dir)):
+
+# ========================
+# Weighted mean helper
+# ========================
+def weighted_mean(series, weights):
+    if weights.sum() == 0:
+        return pd.NA
+    return (series * weights).sum() / weights.sum()
+
+
+# ========================
+# STEP 1: LOAD ALL STATS
+# ========================
+all_data = []
+
+for quarter_folder in os.listdir(output_dir):
     quarter_path = os.path.join(output_dir, quarter_folder)
     if not os.path.isdir(quarter_path):
         continue
 
     data_quality_path = os.path.join(quarter_path, "data_quality")
     if not os.path.isdir(data_quality_path):
-        # skip folders without data_quality
         continue
 
-    # find *_stats.csv files
     csv_files = [f for f in os.listdir(data_quality_path) if f.endswith("_stats.csv")]
     if not csv_files:
         continue
 
     for csv_file in csv_files:
         csv_path = os.path.join(data_quality_path, csv_file)
-        try:
-            df = pd.read_csv(csv_path)
-        except Exception as e:
-            print(f"Warning: could not read {csv_path}: {e}")
-            continue
+        df = pd.read_csv(csv_path)
 
-        # normalize headers to lowercase, underscores
+        # Normalize headers
         df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
 
-        # apply mapping: if CSV uses other names, rename to our internal names
-        for src, target in COLUMN_MAP.items():
-            if src in df.columns and df.columns.tolist().count(src) > 0:
-                df = df.rename(columns={src: target})
+        # Rename using aliases (tolerant)
+        for old, new in COLUMN_ALIASES.items():
+            if old.lower() in df.columns:
+                df.rename(columns={old.lower(): new}, inplace=True)
 
-        # ensure 'file' and 'column' present
-        if 'file' not in df.columns or 'column' not in df.columns:
-            # try common alternatives
-            if 'filename' in df.columns:
-                df = df.rename(columns={'filename': 'file'})
-            if 'col' in df.columns:
-                df = df.rename(columns={'col': 'column'})
+        # ensure essential columns exist
+        for col in ["min", "max", "avg_value", "min_length", "max_length", "min_date", "max_date"]:
+            if col not in df.columns:
+                df[col] = pd.NA
 
-        # make sure expected columns exist (add as NA if missing)
-        for expected in ['file','column','min','max','mean','min_length','max_length','min_date','max_date']:
-            if expected not in df.columns:
-                df[expected] = pd.NA
+        # convert dtypes
+        for col in ["min", "max", "avg_value", "min_length", "max_length"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # coerce numeric columns
-        for ncol in ['min','max','mean','min_length','max_length']:
-            df[ncol] = pd.to_numeric(df[ncol], errors='coerce')
+        for col in ["min_date", "max_date"]:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
 
-        # coerce dates
-        for dcol in ['min_date','max_date']:
-            df[dcol] = pd.to_datetime(df[dcol], errors='coerce')
+        # segment from filename
+        df["segment"] = df["file"].str.replace(".parquet", "", regex=False)
+        df["Quarter"] = quarter_folder
 
-        # extract segment from file (SEG1.parquet -> SEG1) but guard if file missing
-        df['segment'] = df['file'].astype(str).str.replace('.parquet','', regex=False).str.strip()
+        all_data.append(df)
 
-        # add Quarter
-        df['Quarter'] = quarter_folder
 
-        records.append(df[['segment','column','min','max','mean','min_length','max_length','min_date','max_date','Quarter']])
+# ========================
+# STEP 2: COMBINE QUARTERS
+# ========================
+master_df = pd.concat(all_data, ignore_index=True)
 
-if not records:
-    raise SystemExit("No valid stats CSVs found under output_dir. Check path and file patterns.")
 
-master_df = pd.concat(records, ignore_index=True)
+# ========================
+# STEP 3: GROUP BY SEGMENT + COLUMN
+# ========================
+grouped = master_df.groupby(["segment", "column"])
 
-# -----------------------
-# STEP 2: group by segment + column and compute aggregates
-# -----------------------
-grouped = master_df.groupby(['segment','column'], sort=True)
 
-summary_rows = []
+# ========================
+# Helper to track which quarter had min/max
+# ========================
+def quarter_for_extreme(df, group, col, func):
+    if group[col].isnull().all():
+        return pd.NA
+    idx = group[col].idxmin() if func == "min" else group[col].idxmax()
+    return df.loc[idx, "Quarter"]
 
-for (seg, col), group in grouped:
-    row = {"segment": seg, "column": col}
 
-    # ------- MIN of per-quarter mins -------
-    if group['min'].notna().any():
-        min_val = group['min'].min()
-        # quarter when that min occurred (first occurrence)
-        min_idx = group['min'].idxmin()
-        min_q = group.loc[min_idx, 'Quarter']
-        row['min_of_mins'] = min_val
-        row['min_of_mins_quarter'] = min_q
-    else:
-        row['min_of_mins'] = pd.NA
-        row['min_of_mins_quarter'] = pd.NA
+# ========================
+# STEP 4: Aggregate global min/max
+# ========================
+summary = grouped.agg({
+    "min": "min",
+    "max": "max",
+    "min_length": "min",
+    "max_length": "max",
+    "min_date": "min",
+    "max_date": "max"
+}).reset_index()
 
-    # ------- MAX of per-quarter maxs -------
-    if group['max'].notna().any():
-        max_val = group['max'].max()
-        max_idx = group['max'].idxmax()
-        max_q = group.loc[max_idx, 'Quarter']
-        row['max_of_maxs'] = max_val
-        row['max_of_maxs_quarter'] = max_q
-    else:
-        row['max_of_maxs'] = pd.NA
-        row['max_of_maxs_quarter'] = pd.NA
+summary = summary.round(2)
 
-    # ------- AVG value across quarters -------
-    # Prefer an explicit per-quarter 'mean' if available
-    if group['mean'].notna().any():
-        # use mean of available per-quarter means (accurate for quarter-level means)
-        row['avg_value_across_quarters'] = group['mean'].mean()
-        row['avg_value_method'] = 'mean_of_means'
-    else:
-        # if no per-quarter mean, approximate per-quarter central value via midpoint (min+max)/2 when both present
-        midpoints = group[['min','max']].dropna()
-        if not midpoints.empty:
-            # per-quarter midpoint
-            mid = (midpoints['min'] + midpoints['max']) / 2.0
-            row['avg_value_across_quarters'] = mid.mean()
-            row['avg_value_method'] = 'approx_midpoint_mean'
-        else:
-            row['avg_value_across_quarters'] = pd.NA
-            row['avg_value_method'] = pd.NA
 
-    # ------- String length min/max -------
-    # min_length_of_mins: min across per-quarter min_length
-    if group['min_length'].notna().any():
-        ml = group['min_length'].min()
-        ml_idx = group['min_length'].idxmin()
-        ml_q = group.loc[ml_idx,'Quarter']
-        row['min_length_of_mins'] = ml
-        row['min_length_of_mins_quarter'] = ml_q
-    else:
-        row['min_length_of_mins'] = pd.NA
-        row['min_length_of_mins_quarter'] = pd.NA
+# ========================
+# STEP 5: Add quarters for each extreme value
+# ========================
+summary["min_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "min", "min"),
+    axis=1
+)
+summary["max_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "max", "max"),
+    axis=1
+)
 
-    if group['max_length'].notna().any():
-        xl = group['max_length'].max()
-        xl_idx = group['max_length'].idxmax()
-        xl_q = group.loc[xl_idx, 'Quarter']
-        row['max_length_of_maxs'] = xl
-        row['max_length_of_maxs_quarter'] = xl_q
-    else:
-        row['max_length_of_maxs'] = pd.NA
-        row['max_length_of_maxs_quarter'] = pd.NA
+summary["min_length_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "min_length", "min"),
+    axis=1
+)
+summary["max_length_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "max_length", "max"),
+    axis=1
+)
 
-    # ------- Date ranges -------
-    if group['min_date'].notna().any():
-        dmin = group['min_date'].min()
-        dmin_idx = group['min_date'].idxmin()
-        dmin_q = group.loc[dmin_idx,'Quarter']
-        row['earliest_date'] = dmin
-        row['earliest_date_quarter'] = dmin_q
-    else:
-        row['earliest_date'] = pd.NaT
-        row['earliest_date_quarter'] = pd.NA
+summary["min_date_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "min_date", "min"),
+    axis=1
+)
+summary["max_date_quarter"] = summary.apply(
+    lambda row: quarter_for_extreme(master_df, grouped.get_group((row["segment"], row["column"])), "max_date", "max"),
+    axis=1
+)
 
-    if group['max_date'].notna().any():
-        dmax = group['max_date'].max()
-        dmax_idx = group['max_date'].idxmax()
-        dmax_q = group.loc[dmax_idx,'Quarter']
-        row['latest_date'] = dmax
-        row['latest_date_quarter'] = dmax_q
-    else:
-        row['latest_date'] = pd.NaT
-        row['latest_date_quarter'] = pd.NA
 
-    summary_rows.append(row)
+# ========================
+# STEP 6: Weighted mean across quarters
+# ========================
+wmeans = (
+    master_df.groupby(["segment", "column"])
+    .apply(lambda g: weighted_mean(g["avg_value"], g["total_rows"]))
+    .reset_index()
+    .rename(columns={0: "weighted_mean"})
+)
 
-summary_df = pd.DataFrame(summary_rows)
+summary = summary.merge(wmeans, on=["segment", "column"], how="left")
+summary["weighted_mean"] = summary["weighted_mean"].round(2)
 
-# -----------------------
-# STEP 3: tidy up, rounding, column order
-# -----------------------
-# Round numeric values where applicable
-num_cols = ['min_of_mins','max_of_maxs','avg_value_across_quarters','min_length_of_mins','max_length_of_maxs']
-for c in num_cols:
-    if c in summary_df.columns:
-        summary_df[c] = pd.to_numeric(summary_df[c], errors='coerce').round(2)
 
-# Format dates to ISO strings for CSV
-for dc in ['earliest_date','latest_date']:
-    if dc in summary_df.columns:
-        summary_df[dc] = pd.to_datetime(summary_df[dc], errors='coerce')
+# ========================
+# STEP 7: Order columns nicely
+# ========================
+final_cols = [
+    "segment", "column",
+    "min", "min_quarter",
+    "max", "max_quarter",
+    "min_length", "min_length_quarter",
+    "max_length", "max_length_quarter",
+    "min_date", "min_date_quarter",
+    "max_date", "max_date_quarter",
+    "weighted_mean"
+]
 
-# Reorder columns so quarter columns are adjacent
-ordered_cols = ['segment','column',
-                'min_of_mins','min_of_mins_quarter',
-                'max_of_maxs','max_of_maxs_quarter',
-                'avg_value_across_quarters','avg_value_method',
-                'min_length_of_mins','min_length_of_mins_quarter',
-                'max_length_of_maxs','max_length_of_maxs_quarter',
-                'earliest_date','earliest_date_quarter',
-                'latest_date','latest_date_quarter']
+summary = summary[final_cols]
 
-# keep only those that exist
-ordered_cols = [c for c in ordered_cols if c in summary_df.columns]
 
-summary_df = summary_df[ordered_cols]
-
-# -----------------------
-# STEP 4: write CSV
-# -----------------------
-summary_df.to_csv(OUTFILE, index=False)
-print(f"Wrote {OUTFILE} with {len(summary_df)} rows (segment+column).")
+# ========================
+# STEP 8: Save final output
+# ========================
+summary.to_csv("segment_value_trends_with_quarters.csv", index=False)
+print("\n✅ Saved: segment_value_trends_with_quarters.csv\n")
