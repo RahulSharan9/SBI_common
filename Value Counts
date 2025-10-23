@@ -1,0 +1,60 @@
+import os
+import pandas as pd
+
+# >>> EDIT THESE <<<
+base_dir = "output_folder"
+value_counts_file = "value_counts.csv"
+list_of_columns = ["A", "X", "Y"]  # your column list
+
+all_rows = []
+
+# Walk through all subfolders
+for quarter in os.listdir(base_dir):
+    qpath = os.path.join(base_dir, quarter)
+    if not os.path.isdir(qpath):
+        continue
+
+    dq_path = os.path.join(qpath, "data_quality")
+    if not os.path.isdir(dq_path):
+        continue
+
+    # Find all CSVs in /data_quality
+    for fname in os.listdir(dq_path):
+        if fname.endswith(".csv") and "value" in fname.lower():  # flexible matching
+            fpath = os.path.join(dq_path, fname)
+
+            df = pd.read_csv(fpath)
+
+            # Safety conversions
+            df.columns = df.columns.str.strip().str.lower()
+
+            required_cols = {"value", "count", "file", "column"}
+            if not required_cols.issubset(df.columns):
+                continue
+
+            # filter only required columns
+            df = df[df["column"].isin(list_of_columns)]
+
+            if df.empty:
+                continue
+
+            # extract Segment from file column: SEG1.parquet -> SEG1
+            df["segment"] = df["file"].str.extract(r"(SEG\d+)", expand=False)
+
+            # add Quarter
+            df["quarter"] = quarter
+
+            all_rows.append(df)
+
+# Combine everything
+if all_rows:
+    final_df = pd.concat(all_rows, ignore_index=True)
+    # reorder columns
+    final_df = final_df[["quarter", "segment", "column", "value", "count", "file"]]
+
+    # Save output
+    final_df.to_csv("consolidated_value_counts.csv", index=False)
+    print("✅ Summary generated: consolidated_value_counts.csv")
+    display(final_df.head(20))
+else:
+    print("⚠️ No matching rows found.")
