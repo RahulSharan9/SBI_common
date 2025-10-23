@@ -5,7 +5,7 @@ import pandas as pd
 # Only these columns will be consolidated
 list_of_columns = ["A", "X", "Y"]
 
-# base folder where quarter subfolders exist
+# Base folder where quarter subfolders exist
 base_dir = "output_folder"
 
 all_rows = []
@@ -27,7 +27,7 @@ for quarter in os.listdir(base_dir):
 
             df = pd.read_csv(fpath)
 
-            # normalize column names
+            # Normalize column names
             df.columns = df.columns.str.strip().str.lower()
 
             required_cols = {"value", "count", "file", "column"}
@@ -36,14 +36,14 @@ for quarter in os.listdir(base_dir):
 
             # <<< FILTER APPLIED HERE >>>
             df = df[df["column"].isin(list_of_columns)]
-
             if df.empty:
                 continue
 
-            # segment extraction from filename
-            df["segment"] = df["file"].str.extract(r"(seg\d+)", expand=False).str.upper()
+            # Extract segment from filename, case-insensitive, handle underscores
+            df["segment"] = df["file"].str.extract(r"(seg_?\d+)", flags=pd.RegexFlags.IGNORECASE, expand=False)
+            df["segment"] = df["segment"].str.replace("_","").str.upper()  # normalize SEG_1 -> SEG1
 
-            # add quarter metadata
+            # Add quarter metadata
             df["quarter"] = quarter
 
             all_rows.append(df)
@@ -51,10 +51,12 @@ for quarter in os.listdir(base_dir):
 # Combine outputs
 if all_rows:
     final_df = pd.concat(all_rows, ignore_index=True)
+    # Reorder columns for clarity
     final_df = final_df[["quarter", "segment", "column", "value", "count", "file"]]
 
     final_df.to_csv("consolidated_value_counts.csv", index=False)
     print("✅ Summary generated: consolidated_value_counts.csv")
+    display(final_df.head(20))
 
 else:
     print("⚠️ No matching rows found for your selected columns.")
