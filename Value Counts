@@ -68,4 +68,24 @@ if all_rows:
     final_df = pd.concat(all_rows, ignore_index=True)
 
     # Reorder columns
-    final_df = final_df
+    final_df = final_df[[
+        "quarter",
+        "quarter_date",
+        "segment",
+        "column",
+        "value",
+        "count",
+        "file"
+    ]]
+
+    # Sort for readability
+    final_df = final_df.sort_values(
+        ["quarter_date", "segment", "column", "count"],
+        ascending=[True, True, True, False]
+    )
+
+    final_df.to_csv("value_counts_trend.csv", index=False)
+    print("✅ Summary generated: value_counts_trend.csv")
+
+else:
+    print("⚠️ No matching rows found for your selected columns.")
