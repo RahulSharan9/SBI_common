@@ -26,7 +26,16 @@ for quarter in os.listdir(base_dir):
         if fname.endswith(".csv") and "value" in fname.lower():
             fpath = os.path.join(data_quality_path, fname)
 
-            df = pd.read_csv(fpath)
+            # Read CSV with enforced dtypes to avoid mixed type warnings
+            df = pd.read_csv(
+                fpath,
+                dtype={
+                    "value": str,
+                    "count": float,
+                    "file": str,
+                    "column": str
+                }
+            )
 
             # Normalize column names
             df.columns = df.columns.str.strip().str.lower()
@@ -47,7 +56,8 @@ for quarter in os.listdir(base_dir):
             df["quarter"] = quarter
 
             # Create a sortable quarter end date
-            df["quarter_date"] = pd.to_datetime(df["quarter"], format="%b_%Y", errors="coerce") + MonthEnd(0)
+            # Works with full month names, 3-letter abbreviations, etc.
+            df["quarter_date"] = pd.to_datetime(df["quarter"] + "_01", errors="coerce") + MonthEnd(0)
 
             all_rows.append(df)
 
