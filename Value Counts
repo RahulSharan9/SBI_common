@@ -56,8 +56,10 @@ for quarter in os.listdir(base_dir):
             df["quarter"] = quarter
 
             # Create a sortable quarter end date
-            # Works with full month names, 3-letter abbreviations, etc.
-            df["quarter_date"] = pd.to_datetime(df["quarter"] + "_01", errors="coerce") + MonthEnd(0)
+            # Handles "Sept_2019", "Dec_2018", "March_2020", etc.
+            df["quarter_date"] = pd.to_datetime(
+                df["quarter"].str.replace("_", " ") + " 01", errors="coerce"
+            ) + MonthEnd(0)
 
             all_rows.append(df)
 
@@ -66,22 +68,4 @@ if all_rows:
     final_df = pd.concat(all_rows, ignore_index=True)
 
     # Reorder columns
-    final_df = final_df[[
-        "quarter",
-        "quarter_date",
-        "segment",
-        "column",
-        "value",
-        "count",
-        "file"
-    ]]
-
-    # Sort for readability
-    final_df = final_df.sort_values(["quarter_date", "segment", "column", "count"],
-                                    ascending=[True, True, True, False])
-
-    final_df.to_csv("value_counts_trend.csv", index=False)
-    print("✅ Summary generated: value_counts_trend.csv")
-
-else:
-    print("⚠️ No matching rows found for your selected columns.")
+    final_df = final_df
