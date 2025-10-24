@@ -1,13 +1,13 @@
 import os
-import re
 import pandas as pd
+from pandas.tseries.offsets import MonthEnd
 
-# >>> EDIT THIS <<<
+# >>> EDIT THIS <<< 
 # Only these columns will be analysed across quarters
-list_of_columns = []
+list_of_columns = ["ACCOUNTID", "PRODUCT", "REGION"]  # example
 
-# base folder where quarter subfolders exist
-base_dir = 
+# Base folder where quarter subfolders exist
+base_dir = r"path\to\output_folder"
 
 all_rows = []
 
@@ -21,7 +21,7 @@ for quarter in os.listdir(base_dir):
     if not os.path.isdir(data_quality_path):
         continue
 
-    # Look for possible value_counts CSVs
+    # Look for value count CSVs
     for fname in os.listdir(data_quality_path):
         if fname.endswith(".csv") and "value" in fname.lower():
             fpath = os.path.join(data_quality_path, fname)
@@ -35,28 +35,43 @@ for quarter in os.listdir(base_dir):
             if not required_cols.issubset(df.columns):
                 continue
 
-            # <<< FILTER APPLIED HERE >>>
-            df = df[df["column"].isin(list_of_columns)]
+            # Filter only requested columns (case-insensitive)
+            df = df[df["column"].str.upper().isin(list_of_columns)]
             if df.empty:
                 continue
 
-            # Extract segment from filename, case-insensitive, handle underscores
-            df["segment"] = df["file"].str.extract(r"(seg_?\d+)", flags=re.IGNORECASE, expand=False)
-            df["segment"] = df["segment"].str.replace("_","").str.upper()  # normalize SEG_1 -> SEG1
+            # Extract segment name from filename (strip .parquet)
+            df["segment"] = df["file"].str.replace(".parquet", "", regex=False).str.strip()
 
             # Add quarter metadata
             df["quarter"] = quarter
 
-            all_rows.append(df)
+            # Create a sortable quarter end date
+            df["quarter_date"] = pd.to_datetime(df["quarter"], format="%b_%Y", errors="coerce") + MonthEnd(0)
 
+            all_rows.append(df)
 
 # Combine outputs
 if all_rows:
     final_df = pd.concat(all_rows, ignore_index=True)
-    final_df = final_df[["quarter", "segment", "column", "value", "count", "file"]]
+
+    # Reorder columns
+    final_df = final_df[[
+        "quarter",
+        "quarter_date",
+        "segment",
+        "column",
+        "value",
+        "count",
+        "file"
+    ]]
+
+    # Sort for readability
+    final_df = final_df.sort_values(["quarter_date", "segment", "column", "count"],
+                                    ascending=[True, True, True, False])
 
     final_df.to_csv("value_counts_trend.csv", index=False)
-    print("Summary generated: value_counts_trend.csv")
+    print("✅ Summary generated: value_counts_trend.csv")
 
 else:
-    print("No matching rows found for your selected columns")
+    print("⚠️ No matching rows found for your selected columns.")
